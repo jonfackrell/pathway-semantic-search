@@ -46,15 +46,11 @@ jobs:
           const path = require('path');
           const YAML = require('yaml');
 
-          const MEILI_HOST = ${{ secrets.MEILI_HOST }};
-          const MEILI_API_KEY = ${{ secrets.MEILI_API_KEY }};
-          const MEILI_INDEX_UID = ${{ secrets.MEILI_INDEX_UID }};
-          const DOCS_ROOT = ${{ vars.DOCS_ROOT }} || './docs';
-          const DOCS_BASE_URL = (process.env.DOCS_BASE_URL || '').replace(/\/?$/, '/');
-
-          const GITHUB_REPOSITORY = process.env.GITHUB_REPOSITORY; // owner/repo
-          const GITHUB_REF_NAME = process.env.GITHUB_REF_NAME;     // branch
-
+          const MEILI_HOST = '${{ secrets.MEILI_HOST }}';
+          const MEILI_API_KEY = '${{ secrets.MEILI_API_KEY }}';
+          const MEILI_INDEX_UID = '${{ secrets.MEILI_INDEX_UID }}';
+          const DOCS_ROOT = '${{ vars.DOCS_ROOT }}' || './docs';
+          
           if (!MEILI_HOST || !MEILI_API_KEY || !MEILI_INDEX_UID) {
             console.error('Missing MEILI_HOST, MEILI_API_KEY, or MEILI_INDEX_UID.');
             process.exit(1);
