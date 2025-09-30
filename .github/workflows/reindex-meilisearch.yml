@@ -19,7 +19,7 @@ jobs:
       contents: read
 
     env:
-      MEILI_HOST: ${{ secrets.MEILI_HOST }}/indexes
+      MEILI_HOST: ${{ secrets.MEILI_HOST }}
       MEILI_API_KEY: ${{ secrets.MEILI_API_KEY }}
       MEILI_INDEX_UID: ${{ secrets.MEILI_INDEX_UID }}
 
