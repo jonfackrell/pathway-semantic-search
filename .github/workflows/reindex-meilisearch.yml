@@ -99,7 +99,7 @@ jobs:
             return { id, title, text, url };
           }
 
-          function parseYamlFile(absPath, root) {
+          function parseYamlFile(absPath, root, fileId) {
             const rel = path.relative(root, absPath).replace(/\\/g, '/');
             const content = readTextSafe(absPath);
             const docs = YAML.parseAllDocuments(content).map(d => d.toJSON());
@@ -110,19 +110,7 @@ jobs:
               if (normalized) out.push(normalized);
             };
 
-            docs.forEach((doc, di) => {
-              if (!doc) return;
-              if (Array.isArray(doc)) {
-                doc.forEach((item, i) => pushNormalized(item, i));
-              } else if (typeof doc === 'object') {
-                if (Array.isArray(doc.documents)) {
-                  doc.documents.forEach((item, i) => pushNormalized(item, i));
-                } else {
-                  // single object shaped as a doc
-                  pushNormalized(doc, di);
-                }
-              }
-            });
+            pushNormalized(doc, fileId);
 
             return out;
           }
@@ -193,12 +181,14 @@ jobs:
 
             // Collect docs from all YAML files
             const all = [];
+            let fileCount = 1;
             for (const file of walk(DOCS_ROOT)) {
-              const docs = parseYamlFile(file, DOCS_ROOT);
+              const docs = parseYamlFile(file, DOCS_ROOT, fileCount);
               if (docs.length) {
                 console.log(`Parsed ${docs.length} doc(s) from ${path.relative(DOCS_ROOT, file)}`);
                 all.push(...docs);
               }
+              fileCount = fileCount++;
             }
             console.log(`Total parsed documents: ${all.length}`);
 
