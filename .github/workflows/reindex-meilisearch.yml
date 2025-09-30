@@ -46,10 +46,10 @@ jobs:
           const path = require('path');
           const YAML = require('yaml');
 
-          const MEILI_HOST = process.env.MEILI_HOST;
-          const MEILI_API_KEY = process.env.MEILI_API_KEY;
-          const MEILI_INDEX_UID = process.env.MEILI_INDEX_UID;
-          const DOCS_ROOT = process.env.DOCS_ROOT || '.';
+          const MEILI_HOST = ${{ secrets.MEILI_HOST }};
+          const MEILI_API_KEY = ${{ secrets.MEILI_API_KEY }};
+          const MEILI_INDEX_UID = ${{ secrets.MEILI_INDEX_UID }};
+          const DOCS_ROOT = ${{ vars.DOCS_ROOT }} || './docs';
           const DOCS_BASE_URL = (process.env.DOCS_BASE_URL || '').replace(/\/?$/, '/');
 
           const GITHUB_REPOSITORY = process.env.GITHUB_REPOSITORY; // owner/repo
@@ -89,23 +89,11 @@ jobs:
             return undefined;
           }
 
-          function ensureUrl(relPath, idxInFile, candidateUrl) {
-            if (typeof candidateUrl === 'string' && candidateUrl.trim()) return candidateUrl.trim();
-            if (DOCS_BASE_URL) {
-              return DOCS_BASE_URL + relPath.replace(/^\.\//, '') + (idxInFile > 0 ? `#${idxInFile}` : '');
-            }
-            if (GITHUB_REPOSITORY && GITHUB_REF_NAME) {
-              return `https://github.com/${GITHUB_REPOSITORY}/blob/${encodeURIComponent(GITHUB_REF_NAME)}/${relPath}${idxInFile > 0 ? `#${idxInFile}` : ''}`;
-            }
-            // Last resort: file URL-like
-            return `file://${relPath}${idxInFile > 0 ? `#${idxInFile}` : ''}`;
-          }
-
           function normalizeDoc(raw, relPath, idxInFile) {
             if (!raw || typeof raw !== 'object') return null;
             const title = typeof raw.title === 'string' ? raw.title.trim() : undefined;
             const text = coerceText(raw);
-            const url = ensureUrl(relPath, idxInFile, raw.url);
+            const url = raw.url;
 
             if (!title || !text) {
               // Skip invalid records but log a helpful message
