@@ -110,7 +110,7 @@ jobs:
               if (normalized) out.push(normalized);
             };
 
-            pushNormalized(doc, fileId);
+            pushNormalized(docs, fileId);
 
             return out;
           }
