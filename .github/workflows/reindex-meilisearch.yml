@@ -1,0 +1,235 @@
+name: Reindex Meilisearch
+
+on:
+  push:
+    branches: [ main ]
+    # Optional: only run when YAML changes
+    # paths:
+    #   - '**/*.yml'
+    #   - '**/*.yaml'
+
+concurrency:
+  group: meili-reindex
+  cancel-in-progress: true
+
+jobs:
+  reindex:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    env:
+      MEILI_HOST: ${{ secrets.MEILI_HOST }}
+      MEILI_API_KEY: ${{ secrets.MEILI_API_KEY }}
+      MEILI_INDEX_UID: ${{ secrets.MEILI_INDEX_UID }}
+      DOCS_ROOT: ${{ vars.DOCS_ROOT }}
+      DOCS_BASE_URL: ${{ vars.DOCS_BASE_URL }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install YAML parser
+        run: |
+          npm --yes init -y
+          npm i yaml@^2
+
+      - name: Create indexer script
+        run: |
+          mkdir -p scripts
+          cat > scripts/meili-reindex-yaml.js <<'EOF'
+          const fs = require('fs');
+          const path = require('path');
+          const YAML = require('yaml');
+
+          const MEILI_HOST = process.env.MEILI_HOST;
+          const MEILI_API_KEY = process.env.MEILI_API_KEY;
+          const MEILI_INDEX_UID = process.env.MEILI_INDEX_UID;
+          const DOCS_ROOT = process.env.DOCS_ROOT || '.';
+          const DOCS_BASE_URL = (process.env.DOCS_BASE_URL || '').replace(/\/?$/, '/');
+
+          const GITHUB_REPOSITORY = process.env.GITHUB_REPOSITORY; // owner/repo
+          const GITHUB_REF_NAME = process.env.GITHUB_REF_NAME;     // branch
+
+          if (!MEILI_HOST || !MEILI_API_KEY || !MEILI_INDEX_UID) {
+            console.error('Missing MEILI_HOST, MEILI_API_KEY, or MEILI_INDEX_UID.');
+            process.exit(1);
+          }
+
+          const IGNORE_DIRS = new Set(['.git', '.github', 'node_modules', '.next', 'dist', 'build', '.cache']);
+          const ALLOWED_EXT = new Set(['.yml', '.yaml']);
+
+          function* walk(dir) {
+            const list = fs.readdirSync(dir, { withFileTypes: true });
+            for (const ent of list) {
+              const full = path.join(dir, ent.name);
+              if (ent.isDirectory()) {
+                if (!IGNORE_DIRS.has(ent.name)) yield* walk(full);
+              } else if (ent.isFile()) {
+                const ext = path.extname(ent.name).toLowerCase();
+                if (ALLOWED_EXT.has(ext)) yield full;
+              }
+            }
+          }
+
+          function readTextSafe(p) {
+            try { return fs.readFileSync(p, 'utf8'); } catch { return ''; }
+          }
+
+          // Try to normalize any of: text, body, content, description, text_body -> "text"
+          function coerceText(obj) {
+            if (typeof obj.text === 'string') return obj.text;
+            for (const k of ['body', 'content', 'description', 'text_body']) {
+              if (typeof obj[k] === 'string') return obj[k];
+            }
+            return undefined;
+          }
+
+          function ensureUrl(relPath, idxInFile, candidateUrl) {
+            if (typeof candidateUrl === 'string' && candidateUrl.trim()) return candidateUrl.trim();
+            if (DOCS_BASE_URL) {
+              return DOCS_BASE_URL + relPath.replace(/^\.\//, '') + (idxInFile > 0 ? `#${idxInFile}` : '');
+            }
+            if (GITHUB_REPOSITORY && GITHUB_REF_NAME) {
+              return `https://github.com/${GITHUB_REPOSITORY}/blob/${encodeURIComponent(GITHUB_REF_NAME)}/${relPath}${idxInFile > 0 ? `#${idxInFile}` : ''}`;
+            }
+            // Last resort: file URL-like
+            return `file://${relPath}${idxInFile > 0 ? `#${idxInFile}` : ''}`;
+          }
+
+          function normalizeDoc(raw, relPath, idxInFile) {
+            if (!raw || typeof raw !== 'object') return null;
+            const title = typeof raw.title === 'string' ? raw.title.trim() : undefined;
+            const text = coerceText(raw);
+            const url = ensureUrl(relPath, idxInFile, raw.url);
+
+            if (!title || !text) {
+              // Skip invalid records but log a helpful message
+              console.warn(`Skipping doc at ${relPath}${idxInFile>0?`#${idxInFile}`:''} — missing title or text`);
+              return null;
+            }
+            // Use URL as stable primary key; fall back to "path#idx"
+            const id = url || `${relPath}#${idxInFile}`;
+            return { id, title, text, url };
+          }
+
+          function parseYamlFile(absPath, root) {
+            const rel = path.relative(root, absPath).replace(/\\/g, '/');
+            const content = readTextSafe(absPath);
+            const docs = YAML.parseAllDocuments(content).map(d => d.toJSON());
+            const out = [];
+
+            const pushNormalized = (obj, i) => {
+              const normalized = normalizeDoc(obj, rel, i);
+              if (normalized) out.push(normalized);
+            };
+
+            docs.forEach((doc, di) => {
+              if (!doc) return;
+              if (Array.isArray(doc)) {
+                doc.forEach((item, i) => pushNormalized(item, i));
+              } else if (typeof doc === 'object') {
+                if (Array.isArray(doc.documents)) {
+                  doc.documents.forEach((item, i) => pushNormalized(item, i));
+                } else {
+                  // single object shaped as a doc
+                  pushNormalized(doc, 0);
+                }
+              }
+            });
+
+            return out;
+          }
+
+          async function meili(pathname, options = {}) {
+            const url = `${MEILI_HOST.replace(/\/$/, '')}${pathname}`;
+            const res = await fetch(url, {
+              ...options,
+              headers: {
+                'Authorization': `Bearer ${MEILI_API_KEY}`,
+                'Content-Type': 'application/json',
+                ...(options.headers || {}),
+              },
+            });
+            if (!res.ok) {
+              const text = await res.text().catch(() => '');
+              throw new Error(`${options.method || 'GET'} ${url} -> ${res.status} ${res.statusText}\n${text}`);
+            }
+            const ct = res.headers.get('content-type') || '';
+            if (ct.includes('application/json')) return res.json();
+            return res.text();
+          }
+
+          async function waitForTask(taskUid, timeoutMs = 5 * 60 * 1000, intervalMs = 1000) {
+            const start = Date.now();
+            while (true) {
+              const task = await meili(`/tasks/${taskUid}`);
+              if (task.status === 'succeeded') return task;
+              if (task.status === 'failed') {
+                throw new Error(`Meili task ${taskUid} failed: ${JSON.stringify(task.error)}`);
+              }
+              if (Date.now() - start > timeoutMs) {
+                throw new Error(`Timeout waiting for task ${taskUid}`);
+              }
+              await new Promise(r => setTimeout(r, intervalMs));
+            }
+          }
+
+          async function deleteAllDocuments() {
+            const resp = await meili(`/indexes/${encodeURIComponent(MEILI_INDEX_UID)}/documents`, { method: 'DELETE' });
+            const taskUid = resp.taskUid ?? resp.uid ?? resp.taskUid;
+            if (typeof taskUid === 'undefined') {
+              console.warn('DELETE documents did not return a task uid; response:', resp);
+              return;
+            }
+            console.log('Delete task enqueued:', taskUid);
+            await waitForTask(taskUid);
+            console.log('All documents deleted.');
+          }
+
+          async function addDocuments(documents) {
+            if (!documents.length) {
+              console.log('No valid YAML documents found; nothing to index.');
+              return;
+            }
+            const resp = await meili(`/indexes/${encodeURIComponent(MEILI_INDEX_UID)}/documents?primaryKey=id`, {
+              method: 'POST',
+              body: JSON.stringify(documents),
+            });
+            const taskUid = resp.taskUid ?? resp.uid ?? resp.taskUid;
+            console.log('Add documents task enqueued:', taskUid, `(${documents.length} docs)`);
+            await waitForTask(taskUid);
+            console.log('Documents indexed.');
+          }
+
+          (async () => {
+            console.log('Scanning:', path.resolve(DOCS_ROOT));
+
+            // Collect docs from all YAML files
+            const all = [];
+            for (const file of walk(DOCS_ROOT)) {
+              const docs = parseYamlFile(file, DOCS_ROOT);
+              if (docs.length) {
+                console.log(`Parsed ${docs.length} doc(s) from ${path.relative(DOCS_ROOT, file)}`);
+                all.push(...docs);
+              }
+            }
+            console.log(`Total parsed documents: ${all.length}`);
+
+            // Reindex
+            await deleteAllDocuments();
+            await addDocuments(all);
+          })().catch(err => {
+            console.error(err.stack || String(err));
+            process.exit(1);
+          });
+          EOF
+
+      - name: Re-index in Meilisearch
+        run: node scripts/meili-reindex-yaml.js
