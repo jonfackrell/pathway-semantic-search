@@ -95,7 +95,7 @@ jobs:
               return null;
             }
             // Use URL as stable primary key; fall back to "path#idx"
-            const id = url || `${relPath}#${idxInFile}`;
+            const id = idxInFile;
             return { id, title, text, url };
           }
 
