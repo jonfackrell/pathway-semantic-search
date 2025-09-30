@@ -19,11 +19,9 @@ jobs:
       contents: read
 
     env:
-      MEILI_HOST: ${{ secrets.MEILI_HOST }}
+      MEILI_HOST: ${{ secrets.MEILI_HOST }}/indexes
       MEILI_API_KEY: ${{ secrets.MEILI_API_KEY }}
       MEILI_INDEX_UID: ${{ secrets.MEILI_INDEX_UID }}
-      DOCS_ROOT: ${{ vars.DOCS_ROOT }}
-      DOCS_BASE_URL: ${{ vars.DOCS_BASE_URL }}
 
     steps:
       - name: Checkout
