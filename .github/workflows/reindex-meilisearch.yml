@@ -119,7 +119,7 @@ jobs:
                   doc.documents.forEach((item, i) => pushNormalized(item, i));
                 } else {
                   // single object shaped as a doc
-                  pushNormalized(doc, i);
+                  pushNormalized(doc, di);
                 }
               }
             });
