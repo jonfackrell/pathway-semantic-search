@@ -35,10 +35,8 @@ jobs:
           node-version: '20'
           cache: 'npm'
 
-      - name: Install YAML parser
-        run: |
-          npm --yes init -y
-          npm i yaml@^2
+      - name: Install deps
+        run: npm ci
 
       - name: Create indexer script
         run: |

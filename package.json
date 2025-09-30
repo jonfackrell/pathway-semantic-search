@@ -1,0 +1,26 @@
+{
+  "name": "pathway-semantic-search",
+  "version": "1.0.0",
+  "description": "Index docs to Meilisearch",
+  "main": "index.js",
+  "directories": {
+    "doc": "docs"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jonfackrell/pathway-semantic-search.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/jonfackrell/pathway-semantic-search/issues"
+  },
+  "homepage": "https://github.com/jonfackrell/pathway-semantic-search#readme",
+  "dependencies": {
+    "yaml": "^2.8.1"
+  }
+}
