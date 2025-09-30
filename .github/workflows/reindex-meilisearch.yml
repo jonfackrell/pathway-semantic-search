@@ -183,12 +183,13 @@ jobs:
             const all = [];
             let fileCount = 1;
             for (const file of walk(DOCS_ROOT)) {
-              const docs = parseYamlFile(file, DOCS_ROOT, fileCount);
+              const id = fileCount;
+              const docs = parseYamlFile(file, DOCS_ROOT, id);
               if (docs.length) {
                 console.log(`Parsed ${docs.length} doc(s) from ${path.relative(DOCS_ROOT, file)}`);
                 all.push(...docs);
               }
-              fileCount = fileCount++;
+              fileCount = fileCount + 1;
             }
             console.log(`Total parsed documents: ${all.length}`);
 
