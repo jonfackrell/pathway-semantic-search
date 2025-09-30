@@ -38,169 +38,173 @@ jobs:
 
       - name: Create indexer script
         run: |
-          mkdir -p scripts
-          cat > scripts/meili-reindex-yaml.js <<'EOF'
-          const fs = require('fs');
-          const path = require('path');
-          const YAML = require('yaml');
-
-          const MEILI_HOST = '${{ secrets.MEILI_HOST }}';
-          const MEILI_API_KEY = '${{ secrets.MEILI_API_KEY }}';
-          const MEILI_INDEX_UID = '${{ secrets.MEILI_INDEX_UID }}';
-          const DOCS_ROOT = '${{ vars.DOCS_ROOT }}' || './docs';
-          
-          if (!MEILI_HOST || !MEILI_API_KEY || !MEILI_INDEX_UID) {
+            mkdir -p scripts
+            cat > scripts/meili-reindex-yaml.js <<'EOF'
+            const fs = require('fs');
+            const path = require('path');
+            const YAML = require('yaml');
+            
+            const MEILI_HOST = process.env.MEILI_HOST;
+            const MEILI_API_KEY = process.env.MEILI_API_KEY;
+            const MEILI_INDEX_UID = process.env.MEILI_INDEX_UID;
+            const DOCS_ROOT = process.env.DOCS_ROOT || '.';
+            
+            if (!MEILI_HOST || !MEILI_API_KEY || !MEILI_INDEX_UID) {
             console.error('Missing MEILI_HOST, MEILI_API_KEY, or MEILI_INDEX_UID.');
             process.exit(1);
-          }
-
-          const IGNORE_DIRS = new Set(['.git', '.github', 'node_modules', '.next', 'dist', 'build', '.cache']);
-          const ALLOWED_EXT = new Set(['.yml', '.yaml']);
-
-          function* walk(dir) {
-            const list = fs.readdirSync(dir, { withFileTypes: true });
-            for (const ent of list) {
-              const full = path.join(dir, ent.name);
-              if (ent.isDirectory()) {
-                if (!IGNORE_DIRS.has(ent.name)) yield* walk(full);
-              } else if (ent.isFile()) {
-                const ext = path.extname(ent.name).toLowerCase();
-                if (ALLOWED_EXT.has(ext)) yield full;
-              }
             }
-          }
-
-          function readTextSafe(p) {
-            try { return fs.readFileSync(p, 'utf8'); } catch { return ''; }
-          }
-
-          // Try to normalize any of: text, body, content, description, text_body -> "text"
-          function coerceText(obj) {
+            
+            const ALLOWED_EXT = new Set(['.yml', '.yaml']);
+            const IGNORE_DIRS = new Set(['.git', '.github', 'node_modules', '.next', 'dist', 'build', '.cache']);
+            
+            function* walk(dir) {
+            const entries = fs.readdirSync(dir, { withFileTypes: true });
+            for (const ent of entries) {
+             const full = path.join(dir, ent.name);
+             if (ent.isDirectory()) {
+               if (!IGNORE_DIRS.has(ent.name)) yield* walk(full);
+             } else if (ent.isFile()) {
+               const ext = path.extname(ent.name).toLowerCase();
+               if (ALLOWED_EXT.has(ext)) yield full;
+             }
+            }
+            }
+            
+            function readFileUtf8(p) {
+            try { return fs.readFileSync(p, 'utf8'); }
+            catch (e) { console.warn(`Cannot read ${p}: ${e.message}`); return ''; }
+            }
+            
+            // Map common alternates to text
+            function coerceText(obj) {
             if (typeof obj.text === 'string') return obj.text;
             for (const k of ['body', 'content', 'description', 'text_body']) {
-              if (typeof obj[k] === 'string') return obj[k];
+             if (typeof obj[k] === 'string') return obj[k];
             }
             return undefined;
-          }
-
-          function normalizeDoc(raw, relPath, idxInFile) {
-            if (!raw || typeof raw !== 'object') return null;
-            const title = typeof raw.title === 'string' ? raw.title.trim() : undefined;
-            const text = coerceText(raw);
-            const url = raw.url;
-
-            if (!title || !text) {
-              // Skip invalid records but log a helpful message
-              console.warn(`Skipping doc at ${relPath}${idxInFile>0?`#${idxInFile}`:''} — missing title or text`);
-              return null;
             }
-            // Use URL as stable primary key; fall back to "path#idx"
-            const id = idxInFile;
-            return { id, title, text, url };
-          }
-
-          function parseYamlFile(absPath, root, fileId) {
+            
+            function parseSingleDocFile(absPath, root) {
             const rel = path.relative(root, absPath).replace(/\\/g, '/');
-            const content = readTextSafe(absPath);
-            const docs = YAML.parseAllDocuments(content).map(d => d.toJSON());
-            const out = [];
-
-            const pushNormalized = (obj, i) => {
-              const normalized = normalizeDoc(obj, rel, i);
-              if (normalized) out.push(normalized);
-            };
-
-            pushNormalized(docs, fileId);
-
-            return out;
-          }
-
-          async function meili(pathname, options = {}) {
+            const raw = readFileUtf8(absPath);
+            if (!raw.trim()) {
+             console.warn(`Skipping empty file: ${rel}`);
+             return null;
+            }
+            const docs = YAML.parseAllDocuments(raw).map(d => d.toJSON());
+            
+            // Enforce EXACTLY one document per file
+            if (docs.length !== 1) {
+             console.warn(`Skipping ${rel}: expected exactly one YAML document (got ${docs.length}).`);
+             return null;
+            }
+            const obj = docs[0];
+            if (!obj || typeof obj !== 'object' || Array.isArray(obj)) {
+             console.warn(`Skipping ${rel}: document is not a YAML object.`);
+             return null;
+            }
+            
+            const title = typeof obj.title === 'string' ? obj.title.trim() : undefined;
+            const text = coerceText(obj);
+            const url  = typeof obj.url === 'string' ? obj.url.trim() : undefined;
+            
+            if (!title || !text || !url) {
+             console.warn(`Skipping ${rel}: missing required field(s). Need title, text, url.`);
+             return null;
+            }
+            return { title, text, url, _rel: rel };
+            }
+            
+            async function meili(pathname, options = {}) {
             const url = `${MEILI_HOST.replace(/\/$/, '')}${pathname}`;
             const res = await fetch(url, {
-              ...options,
-              headers: {
-                'Authorization': `Bearer ${MEILI_API_KEY}`,
-                'Content-Type': 'application/json',
-                ...(options.headers || {}),
-              },
+             ...options,
+             headers: {
+               'Authorization': `Bearer ${MEILI_API_KEY}`,
+               'Content-Type': 'application/json',
+               ...(options.headers || {}),
+             },
             });
             if (!res.ok) {
-              const text = await res.text().catch(() => '');
-              throw new Error(`${options.method || 'GET'} ${url} -> ${res.status} ${res.statusText}\n${text}`);
+             const text = await res.text().catch(() => '');
+             throw new Error(`${options.method || 'GET'} ${url} -> ${res.status} ${res.statusText}\n${text}`);
             }
             const ct = res.headers.get('content-type') || '';
             if (ct.includes('application/json')) return res.json();
             return res.text();
-          }
-
-          async function waitForTask(taskUid, timeoutMs = 5 * 60 * 1000, intervalMs = 1000) {
+            }
+            
+            async function waitForTask(taskUid, timeoutMs = 5 * 60 * 1000, intervalMs = 1000) {
             const start = Date.now();
             while (true) {
-              const task = await meili(`/tasks/${taskUid}`);
-              if (task.status === 'succeeded') return task;
-              if (task.status === 'failed') {
-                throw new Error(`Meili task ${taskUid} failed: ${JSON.stringify(task.error)}`);
-              }
-              if (Date.now() - start > timeoutMs) {
-                throw new Error(`Timeout waiting for task ${taskUid}`);
-              }
-              await new Promise(r => setTimeout(r, intervalMs));
+             const task = await meili(`/tasks/${taskUid}`);
+             if (task.status === 'succeeded') return task;
+             if (task.status === 'failed') throw new Error(`Meili task ${taskUid} failed: ${JSON.stringify(task.error)}`);
+             if (Date.now() - start > timeoutMs) throw new Error(`Timeout waiting for task ${taskUid}`);
+             await new Promise(r => setTimeout(r, intervalMs));
             }
-          }
-
-          async function deleteAllDocuments() {
+            }
+            
+            async function deleteAllDocuments() {
             const resp = await meili(`/indexes/${encodeURIComponent(MEILI_INDEX_UID)}/documents`, { method: 'DELETE' });
-            const taskUid = resp.taskUid ?? resp.uid ?? resp.taskUid;
+            const taskUid = resp.taskUid ?? resp.uid;
             if (typeof taskUid === 'undefined') {
-              console.warn('DELETE documents did not return a task uid; response:', resp);
-              return;
+             console.warn('DELETE documents did not return a task uid; response:', resp);
+             return;
             }
             console.log('Delete task enqueued:', taskUid);
             await waitForTask(taskUid);
             console.log('All documents deleted.');
-          }
-
-          async function addDocuments(documents) {
+            }
+            
+            async function addDocuments(documents) {
             if (!documents.length) {
-              console.log('No valid YAML documents found; nothing to index.');
-              return;
+             console.log('No documents to index.');
+             return;
             }
             const resp = await meili(`/indexes/${encodeURIComponent(MEILI_INDEX_UID)}/documents?primaryKey=id`, {
-              method: 'POST',
-              body: JSON.stringify(documents),
+             method: 'POST',
+             body: JSON.stringify(documents),
             });
-            const taskUid = resp.taskUid ?? resp.uid ?? resp.taskUid;
+            const taskUid = resp.taskUid ?? resp.uid;
             console.log('Add documents task enqueued:', taskUid, `(${documents.length} docs)`);
             await waitForTask(taskUid);
             console.log('Documents indexed.');
-          }
-
-          (async () => {
-            console.log('Scanning:', path.resolve(DOCS_ROOT));
-
-            // Collect docs from all YAML files
-            const all = [];
-            let fileCount = 1;
-            for (const file of walk(DOCS_ROOT)) {
-              const id = fileCount;
-              const docs = parseYamlFile(file, DOCS_ROOT, id);
-              if (docs.length) {
-                console.log(`Parsed ${docs.length} doc(s) from ${path.relative(DOCS_ROOT, file)}`);
-                all.push(...docs);
-              }
-              fileCount = fileCount + 1;
             }
-            console.log(`Total parsed documents: ${all.length}`);
-
-            // Reindex
+            
+            (async () => {
+            const root = path.resolve(DOCS_ROOT);
+            console.log('Scanning:', root);
+            
+            // Gather, enforce single-doc / file, then sort and assign ids by index
+            const files = Array.from(walk(root)).map(p => path.resolve(p));
+            files.sort((a, b) => a.localeCompare(b, 'en'));
+            
+            const parsed = [];
+            for (const file of files) {
+             const doc = parseSingleDocFile(file, root);
+             if (doc) parsed.push(doc);
+            }
+            
+            // Assign sequential ids based on index (1..N)
+            const documents = parsed.map((d, idx) => ({
+             id: String(idx + 1),     // <-- id from index
+             title: d.title,
+             text: d.text,
+             url: d.url,
+             // Optionally keep file path for debugging/search (not required):
+             // path: d._rel,
+            }));
+            
+            console.log(`Prepared ${documents.length} document(s).`);
+            
             await deleteAllDocuments();
-            await addDocuments(all);
-          })().catch(err => {
+            await addDocuments(documents);
+            })().catch(err => {
             console.error(err.stack || String(err));
             process.exit(1);
-          });
-          EOF
+            });
+            EOF
 
       - name: Re-index in Meilisearch
         run: node scripts/meili-reindex-yaml.js
